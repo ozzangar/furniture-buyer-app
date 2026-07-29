@@ -428,20 +428,62 @@ def health():
     return {"status": "ok"}
 
 
-# In-memory log of webhooks the shop calls back to us (Level 2: "receiving webhooks").
+# In-memory log of webhook events the shop calls back to us (Level 2: "receiving webhooks").
 WEBHOOK_LOG: list[dict] = []
 
 
-@app.route("/webhooks/incoming", methods=["POST", "GET"])
+@app.route("/webhooks/incoming", methods=["POST"])
 def webhooks_incoming():
-    """Public endpoint the shop API calls back on events. Records what arrives."""
-    if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
-        WEBHOOK_LOG.append({"at": _now(), "payload": payload,
-                            "headers": {k: v for k, v in request.headers.items()
-                                        if k.lower() in ("content-type", "x-webhook-event")}})
-        return {"received": True}, 200
-    return {"count": len(WEBHOOK_LOG), "events": WEBHOOK_LOG[-10:]}
+    """Public endpoint the shop calls on order events. Records a tidy summary for the UI."""
+    payload = request.get_json(silent=True) or {}
+    event = request.headers.get("X-Webhook-Event") or payload.get("event") or "event"
+    data = payload.get("data", payload)
+    # human-friendly one-liner for the UI
+    if event == "order.created":
+        summary = f"Order {str(data.get('order_id',''))[:8]} placed"
+    elif event == "order.status_changed":
+        summary = f"Order {str(data.get('order_id',''))[:8]} → {data.get('status','updated')}"
+    elif event == "webhook.test":
+        summary = "Test event received ✓"
+    else:
+        summary = event
+    WEBHOOK_LOG.append({"at": _now(), "event": event, "summary": summary})
+    return {"received": True}, 200
+
+
+@app.route("/webhooks/enable", methods=["POST"])
+def webhooks_enable():
+    """Register our public callback URL with the shop so it notifies us of order events.
+
+    Needs a public URL (the cloudflared tunnel). Configure PUBLIC_URL, or the app
+    infers it from the request host.
+    """
+    if current_user() is None:
+        return {"error": "not logged in"}, 401
+    base = (os.environ.get("PUBLIC_URL") or request.host_url).rstrip("/")
+    if "127.0.0.1" in base or "localhost" in base:
+        return {"ok": False,
+                "message": "Notifications need a public URL. Start the cloudflared tunnel and "
+                           "set PUBLIC_URL to the https://…trycloudflare.com address, then retry."}, 200
+    callback = f"{base}/webhooks/incoming"
+    try:
+        # avoid duplicates: clear any existing hooks for this user first
+        for wh in shop_api.list_webhooks():
+            if wh.get("webhook_id"):
+                shop_api.delete_webhook(wh["webhook_id"])
+        result = shop_api.register_webhook(callback, events=["order.created", "order.status_changed"])
+    except shop_api.ShopAPIError as e:
+        return {"ok": False, "message": e.message}, 200
+    return {"ok": True, "message": f"Notifications enabled → {callback}",
+            "webhook_id": result.get("webhook_id")}
+
+
+@app.route("/webhooks/events")
+def webhooks_events():
+    """Recent received events, for the UI to poll (login-gated)."""
+    if current_user() is None:
+        return {"error": "not logged in"}, 401
+    return {"count": len(WEBHOOK_LOG), "events": WEBHOOK_LOG[-15:]}
 
 
 if __name__ == "__main__":

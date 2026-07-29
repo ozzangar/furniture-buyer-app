@@ -128,6 +128,27 @@ def get_order_history() -> list[dict]:
     return resp.json() if resp.status_code == 200 else []
 
 
+def register_webhook(callback_url: str, events: list[str] | None = None) -> dict:
+    """Register a callback URL so the shop notifies us of order events."""
+    body = {"user_id": _user_id(), "url": callback_url}
+    if events:
+        body["events"] = events
+    resp = _request("POST", "/webhooks", auth=True, json_body=body)
+    if resp.status_code not in (200, 201):
+        raise ShopAPIError(f"Could not register webhook ({resp.status_code}).", resp.status_code)
+    return resp.json()
+
+
+def list_webhooks() -> list[dict]:
+    resp = _request("GET", f"/webhooks/{_user_id()}", auth=True)
+    return resp.json() if resp.status_code == 200 else []
+
+
+def delete_webhook(webhook_id: str) -> bool:
+    resp = _request("DELETE", f"/webhooks/{webhook_id}", auth=True)
+    return resp.status_code in (200, 204)
+
+
 def get_invoice_pdf(order_id: str) -> bytes:
     """Raw PDF bytes for an order's invoice. Needs the key (fetched server-side).
 
