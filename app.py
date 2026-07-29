@@ -233,4 +233,6 @@ def health():
 if __name__ == "__main__":
     with app.app_context():
         init_db()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Port is configurable (macOS AirPlay Receiver squats on 5000); default 8080.
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(host="127.0.0.1", port=port, debug=True)
