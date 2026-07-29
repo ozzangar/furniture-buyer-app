@@ -4,27 +4,36 @@
   <div class="crumbs"><a href="{{ url_for('index') }}">Home</a> › {{ active_category or 'All products' }}</div>
 {% endblock %}
 {% block content %}
-  <h1 class="page">{{ active_category or 'Shop all furniture' }}</h1>
+  <h1 class="page">
+    {% if query %}Results for “{{ query }}”{% else %}{{ active_category or 'Shop all furniture' }}{% endif %}
+  </h1>
 
   {% if categories %}
     <div class="catnav">
-      <a href="{{ url_for('index') }}" class="{{ 'on' if not active_category }}">All</a>
+      <a href="{{ url_for('index', q=query or None) }}" class="{{ 'on' if not active_category }}">All</a>
       {% for c in categories %}
-        <a href="{{ url_for('index', category=c) }}" class="{{ 'on' if c == active_category }}">{{ c }}</a>
+        <a href="{{ url_for('index', category=c, q=query or None) }}" class="{{ 'on' if c == active_category }}">{{ c }}</a>
       {% endfor %}
     </div>
   {% endif %}
 
+  <p class="muted" id="countline" style="margin:-.4rem 0 1rem;">
+    {{ total }} product{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% elif active_category %} in {{ active_category }}{% endif %}
+  </p>
+
   {% if not products %}
-    <p class="muted">No products to show{% if request.args.get('q') %} for “{{ request.args.get('q') }}”{% endif %}.</p>
+    <p class="muted">No products found{% if query %} for “{{ query }}”{% endif %}{% if active_category %} in {{ active_category }}{% endif %}.
+       {% if query or active_category %}<a href="{{ url_for('index') }}">Clear filters</a>.{% endif %}</p>
   {% endif %}
 
-  <div class="grid">
+  <div class="grid" id="grid">
     {% for p in products %}
       <a class="card" href="{{ url_for('product', item_id=p['item_id']) }}">
         <div class="thumb">
-          <img src="{{ p['_image_url'] }}" alt="{{ p['product_name'] }}"
-               loading="lazy" onerror="this.style.display='none'">
+          <div class="imgwrap">
+            <div class="skel"></div>
+            <img data-src="{{ p['_image_url'] }}" alt="{{ p['product_name'] }}">
+          </div>
         </div>
         <div class="body">
           <div class="price"><span class="cur">$</span>{{ '%.0f'|format(p['price']) }}</div>
@@ -34,4 +43,60 @@
       </a>
     {% endfor %}
   </div>
+
+  <div id="sentinel" style="height:1px;"></div>
+  <p id="loadmsg" class="muted" style="text-align:center;padding:1.5rem 0;display:none;">Loading more…</p>
+
+<script>
+(function () {
+  const grid = document.getElementById('grid');
+  const sentinel = document.getElementById('sentinel');
+  const loadmsg = document.getElementById('loadmsg');
+  let nextSkip = {{ page_size }};
+  let hasMore = {{ 'true' if has_more else 'false' }};
+  let loading = false;
+  const params = new URLSearchParams({
+    {% if active_category %}category: {{ active_category|tojson }},{% endif %}
+    {% if query %}q: {{ query|tojson }},{% endif %}
+  });
+
+  function makeCard(p) {
+    const a = document.createElement('a');
+    a.className = 'card'; a.href = '/product/' + encodeURIComponent(p.item_id);
+    a.innerHTML =
+      '<div class="thumb"><div class="imgwrap"><div class="skel"></div>' +
+      '<img alt=""></div></div>' +
+      '<div class="body"><div class="price"><span class="cur">$</span>' + Math.round(p.price) + '</div>' +
+      '<div class="name"></div><div class="cat"></div></div>';
+    const img = a.querySelector('img');
+    img.setAttribute('data-src', p.image_url);   // shared ImgLoader will fetch it (throttled)
+    img.alt = p.product_name;
+    a.querySelector('.name').textContent = p.product_name;
+    a.querySelector('.cat').textContent = p.category;
+    return a;
+  }
+
+  async function loadMore() {
+    if (loading || !hasMore) return;
+    loading = true; loadmsg.style.display = 'block';
+    params.set('skip', nextSkip);
+    try {
+      const r = await fetch('/api/products?' + params.toString());
+      const data = await r.json();
+      (data.products || []).forEach(p => grid.appendChild(makeCard(p)));
+      if (window.ImgLoader) window.ImgLoader.observe(grid);  // register the new imgs with the throttled loader
+      nextSkip = data.next_skip; hasMore = data.has_more;
+    } catch { /* leave sentinel; user can scroll again */ }
+    loading = false;
+    loadmsg.style.display = hasMore ? 'none' : 'none';
+    if (!hasMore) { loadmsg.textContent = "That's everything."; loadmsg.style.display = 'block'; }
+  }
+
+  if ('IntersectionObserver' in window && hasMore) {
+    new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) loadMore();
+    }, {rootMargin: '600px'}).observe(sentinel);
+  }
+})();
+</script>
 {% endblock %}

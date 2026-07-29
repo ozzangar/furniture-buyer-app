@@ -79,6 +79,18 @@
     .catnav a { text-decoration:none; font-size:.88rem; padding:.4rem .85rem; border-radius:999px;
                 background:#fff; border:1px solid var(--line); }
     .catnav a.on { background:var(--forest); color:#fff; border-color:var(--forest); }
+
+    /* --- skeleton shimmer (loading placeholders) --- */
+    @keyframes shimmer { 0% { background-position:-400px 0; } 100% { background-position:400px 0; } }
+    .skel { background:#ece8df;
+            background-image:linear-gradient(90deg,#ece8df 0px,#f6f3ec 180px,#ece8df 360px);
+            background-size:800px 100%; animation:shimmer 1.25s linear infinite; }
+    /* image wrapper: skeleton shows until the <img> finishes, then image fades in */
+    .imgwrap { position:relative; width:100%; height:100%; }
+    .imgwrap .skel { position:absolute; inset:0; border-radius:inherit; }
+    .imgwrap img { position:relative; opacity:0; transition:opacity .35s ease; }
+    .imgwrap img.loaded { opacity:1; }
+    .imgwrap.done .skel { display:none; }
   </style>
 </head>
 <body>
@@ -91,7 +103,7 @@
     <a class="brand" href="{{ url_for('index') }}"><img src="{{ url_for('static', filename='logo.svg') }}" alt="Boakea"></a>
     <nav>
       <a href="{{ url_for('index') }}">Shop products</a>
-      <a href="{{ url_for('index') }}">Rooms</a>
+      {% if user %}<a href="#" onclick="document.getElementById('fab')?.click();return false;">✨ Assistant</a>{% endif %}
       <a href="{{ url_for('index') }}">Offers</a>
     </nav>
     <form class="search" method="get" action="{{ url_for('index') }}">
@@ -121,5 +133,61 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
+
+  {% if user %}{% include "_agent_widget.html" %}{% endif %}
+
+  <script>
+  // Concurrency-limited, viewport-aware image loader.
+  // Why: native loading="lazy" stampedes on fast scroll — dozens of image requests
+  // fire at once, the server serialises them (seen up to ~15s), skeletons look stuck.
+  // Fix: images start WITHOUT src (data-src only). An observer queues an image when it
+  // nears the viewport; at most MAX_INFLIGHT load at a time. Cards scrolled far past
+  // are dropped from the queue so we never chase images the user blew past.
+  window.ImgLoader = (function () {
+    const MAX_INFLIGHT = 6;
+    let inflight = 0;
+    const queue = [];              // imgs wanted, nearest-first
+    const io = ('IntersectionObserver' in window)
+      ? new IntersectionObserver(onIntersect, {rootMargin: '400px 0px'})
+      : null;
+
+    function settle(img) { img.classList.add('loaded'); const w = img.closest('.imgwrap'); if (w) w.classList.add('done'); }
+    function fail(img) { const w = img.closest('.imgwrap'); if (w) w.classList.add('done'); img.style.display = 'none'; }
+
+    function pump() {
+      while (inflight < MAX_INFLIGHT && queue.length) {
+        const img = queue.shift();
+        if (!img.isConnected || img.dataset.state !== 'wanted') continue;
+        const url = img.getAttribute('data-src');
+        if (!url) continue;
+        img.dataset.state = 'loading';
+        inflight++;
+        img.onload = () => { inflight--; settle(img); pump(); };
+        img.onerror = () => { inflight--; fail(img); pump(); };
+        img.src = url;
+      }
+    }
+    function want(img) {
+      if (img.dataset.state === 'idle') { img.dataset.state = 'wanted'; queue.push(img); pump(); }
+    }
+    function unwant(img) {
+      // scrolled away before it started loading → drop from queue, back to idle
+      if (img.dataset.state === 'wanted') { img.dataset.state = 'idle'; }
+    }
+    function onIntersect(entries) {
+      for (const e of entries) { e.isIntersecting ? want(e.target) : unwant(e.target); }
+    }
+    function observe(root) {
+      (root || document).querySelectorAll('.imgwrap img[data-src]').forEach(function (img) {
+        if (img.dataset.state) return;               // already registered
+        img.dataset.state = 'idle';
+        if (io) io.observe(img); else want(img);      // no IO support → just load
+      });
+    }
+    document.addEventListener('DOMContentLoaded', () => observe(document));
+    observe(document);                                // in case DOM already parsed
+    return { observe };
+  })();
+  </script>
 </body>
 </html>

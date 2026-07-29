@@ -9,11 +9,13 @@
 {% endblock %}
 {% block content %}
   <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:2.5rem;align-items:start;">
-    <div style="background:#f3f1ea;border-radius:14px;padding:1.5rem;text-align:center;">
+    <div style="background:#f3f1ea;border-radius:14px;padding:1.5rem;text-align:center;min-height:320px;">
       {% if product['_image_url'] %}
-        <img src="{{ product['_image_url'] }}" alt="{{ product['product_name'] }}"
-             style="max-width:100%;max-height:480px;mix-blend-mode:multiply;"
-             onerror="this.style.display='none'">
+        <div class="imgwrap" style="min-height:300px;display:flex;align-items:center;justify-content:center;">
+          <div class="skel" style="border-radius:10px;"></div>
+          <img data-src="{{ product['_image_url'] }}" alt="{{ product['product_name'] }}"
+               style="max-width:100%;max-height:480px;mix-blend-mode:multiply;">
+        </div>
       {% endif %}
     </div>
 
