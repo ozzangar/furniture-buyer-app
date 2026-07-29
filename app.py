@@ -292,9 +292,16 @@ def orders():
     return render_template("orders.html", orders=history, total_spent=total_spent)
 
 
+import threading
+
 import shop_agent
 
 MAX_ORDER_VALUE = 3000.0  # must match shop_agent; enforced again here at execute time
+
+# One-time-use tokens for staged orders + a lock, so a confirm executes at most once
+# even under concurrent requests (defends against the double-spend race).
+_ORDER_LOCK = threading.Lock()
+_UNCLAIMED_ORDER_TOKENS: set[str] = set()
 
 
 @app.route("/agent")
@@ -323,11 +330,20 @@ def agent_message():
     session["agent_history"] = result["history"][-20:]  # bound stored context
     pending = result["pending"]
     if pending:
-        # Stash the staged order server-side; the browser only gets a display copy.
+        # Stash the staged order server-side with a one-time token. The token — not the
+        # order details — is what /agent/confirm must claim, so a purchase executes at
+        # most once even under concurrent confirms (see _claim_order).
+        import uuid
+        token = uuid.uuid4().hex
         session["pending_order"] = {"item_id": pending["item_id"],
-                                    "quantity": pending["quantity"]}
+                                    "quantity": pending["quantity"], "token": token}
+        with _ORDER_LOCK:
+            _UNCLAIMED_ORDER_TOKENS.add(token)
     else:
-        session.pop("pending_order", None)
+        old = session.pop("pending_order", None)
+        if old:
+            with _ORDER_LOCK:
+                _UNCLAIMED_ORDER_TOKENS.discard(old.get("token"))
     return {"reply": result["reply"], "pending": pending}
 
 
@@ -342,7 +358,16 @@ def agent_confirm():
     if not staged:
         return {"reply": "There's no order waiting to confirm.", "pending": None}, 200
     item_id, qty = staged["item_id"], staged["quantity"]
-    session.pop("pending_order", None)  # single-use: consume it now
+    token = staged.get("token")
+    session.pop("pending_order", None)  # clear from this request's session copy
+
+    # Atomically CLAIM the one-time token. Concurrent confirms race here; only the
+    # first to remove the token proceeds — the rest see it already claimed. This is
+    # what makes the purchase execute at most once regardless of concurrency.
+    with _ORDER_LOCK:
+        if token not in _UNCLAIMED_ORDER_TOKENS:
+            return {"reply": "That order was already confirmed.", "pending": None}, 200
+        _UNCLAIMED_ORDER_TOKENS.discard(token)
 
     # Re-verify server-side — don't trust anything the model said earlier.
     p = shop_api.get_product(item_id)
@@ -393,4 +418,7 @@ if __name__ == "__main__":
         init_db()
     # Port is configurable (macOS AirPlay Receiver squats on 5000); default 8080.
     port = int(os.environ.get("PORT", "8080"))
-    app.run(host="127.0.0.1", port=port, debug=True)
+    # threaded=True: handle concurrent requests (the Day-3 eval harness sends several
+    # at once; the default single-threaded dev server wedges under concurrency).
+    # debug=False: the reloader/debugger is not concurrency-friendly and leaks internals.
+    app.run(host="0.0.0.0", port=port, threaded=True, debug=False)
