@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}My Orders — Furniture Shop{% endblock %}
 {% block content %}
-  <h1>My Orders</h1>
+  <h1 class="page">My Orders</h1>
   <p class="muted">Total spent: <strong>${{ '%.2f'|format(total_spent) }}</strong>
     {% if balance is not none %}· Remaining balance: <strong>${{ '%.2f'|format(balance) }}</strong>{% endif %}</p>
 

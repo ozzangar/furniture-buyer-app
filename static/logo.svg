@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 40" role="img" aria-label="Boakea">
+  <!-- Boakea mark: a stylised roof/house rondel + wordmark -->
+  <g>
+    <circle cx="20" cy="20" r="19" fill="#2f5d4e"/>
+    <!-- roof + house cutout in cream -->
+    <path d="M20 9 L31 18 L28 18 L28 30 L23 30 L23 23 L17 23 L17 30 L12 30 L12 18 L9 18 Z"
+          fill="#faf6ee"/>
+  </g>
+  <text x="46" y="27" font-family="Georgia, 'Times New Roman', serif"
+        font-size="22" font-weight="700" letter-spacing="0.5" fill="#2f5d4e">Boakea</text>
+</svg>

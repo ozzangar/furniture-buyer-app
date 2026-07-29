@@ -1,32 +1,52 @@
 {% extends "base.html" %}
-{% block title %}{{ product['product_name'] }} — Furniture Shop{% endblock %}
+{% block title %}{{ product['product_name'] }} — Boakea{% endblock %}
+{% block crumbs %}
+  <div class="crumbs">
+    <a href="{{ url_for('index') }}">Home</a> ›
+    <a href="{{ url_for('index', category=product['category']) }}">{{ product['category'] }}</a> ›
+    {{ product['product_name'] }}
+  </div>
+{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('index') }}">← Back to catalogue</a></p>
-  {% if product['_image_url'] %}
-    <img src="{{ product['_image_url'] }}" alt="{{ product['product_name'] }}"
-         style="max-width:320px;border-radius:12px;border:1px solid var(--line);"
-         onerror="this.style.display='none'">
-  {% endif %}
-  <h1>{{ product['product_name'] }}</h1>
-  <p class="cat muted">{{ product['category'] }}
-    {% if product['colours'] %}· {{ product['colours']|join(', ') }}{% endif %}</p>
-  {% if product['width'] or product['height'] or product['depth'] %}
-    <p class="muted">Dimensions (cm):
-      {% if product['width'] %}W {{ product['width'] }}{% endif %}
-      {% if product['height'] %}· H {{ product['height'] }}{% endif %}
-      {% if product['depth'] %}· D {{ product['depth'] }}{% endif %}</p>
-  {% endif %}
-  <p class="price" style="font-size:1.5rem;color:var(--accent);font-weight:700;">
-    ${{ '%.2f'|format(product['price']) }}</p>
+  <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:2.5rem;align-items:start;">
+    <div style="background:#f3f1ea;border-radius:14px;padding:1.5rem;text-align:center;">
+      {% if product['_image_url'] %}
+        <img src="{{ product['_image_url'] }}" alt="{{ product['product_name'] }}"
+             style="max-width:100%;max-height:480px;mix-blend-mode:multiply;"
+             onerror="this.style.display='none'">
+      {% endif %}
+    </div>
 
-  {% if user %}
-    <form class="stack" method="post" action="{{ url_for('buy', item_id=product['item_id']) }}">
-      <label>Quantity
-        <input type="number" name="quantity" value="1" min="1" max="99">
-      </label>
-      <button class="btn" type="submit">Buy now</button>
-    </form>
-  {% else %}
-    <p><a class="btn" href="{{ url_for('login') }}">Log in to buy</a></p>
-  {% endif %}
+    <div>
+      <h1 class="page" style="margin-top:0;">{{ product['product_name'] }}</h1>
+      <p class="muted" style="margin-top:-.6rem;">
+        {{ product['category'] }}{% if product['colours'] %}, {{ product['colours']|join(', ') }}{% endif %}</p>
+
+      <div class="price" style="font-size:2.2rem;margin:1rem 0;">
+        <span class="cur">$</span>{{ '%.0f'|format(product['price']) }}</div>
+      <p class="muted" style="font-size:.85rem;margin-top:-.6rem;">Price incl. VAT · excludes delivery</p>
+
+      {% if product['width'] or product['height'] or product['depth'] %}
+        <p><strong>Dimensions</strong> (cm):
+          {% if product['width'] %}W {{ product['width'] }}{% endif %}
+          {% if product['height'] %} · H {{ product['height'] }}{% endif %}
+          {% if product['depth'] %} · D {{ product['depth'] }}{% endif %}</p>
+      {% endif %}
+
+      {% if user %}
+        <form method="post" action="{{ url_for('buy', item_id=product['item_id']) }}"
+              style="display:flex;gap:.75rem;align-items:center;margin:1.2rem 0;">
+          <input class="field" type="number" name="quantity" value="1" min="1" max="99" style="width:80px;">
+          <button class="btn" type="submit">Add to bag</button>
+        </form>
+      {% else %}
+        <p style="margin:1.2rem 0;"><a class="btn" href="{{ url_for('login') }}">Log in to buy</a></p>
+      {% endif %}
+
+      {% if product['link'] %}
+        <p><a class="muted" href="{{ product['link'] }}" target="_blank" rel="noopener">View on manufacturer site ↗</a></p>
+      {% endif %}
+      <p class="muted" style="font-size:.8rem;">Item {{ product['item_id'] }}</p>
+    </div>
+  </div>
 {% endblock %}

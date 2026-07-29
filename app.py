@@ -161,12 +161,20 @@ def logout():
 @app.route("/")
 def index():
     category = request.args.get("category") or None
+    query = (request.args.get("q") or "").strip()
     try:
-        products = shop_api.list_products(category=category, limit=60)
+        products = shop_api.list_products(category=category, limit=48)
         categories = shop_api.get_categories()
     except shop_api.ShopAPIError as e:
         flash(f"Catalogue unavailable: {e.message}", "error")
         products, categories = [], []
+    # Free-text search: the API has no fuzzy search, so filter by name over results.
+    if query:
+        q = query.lower()
+        products = [p for p in products if q in (p.get("product_name") or "").lower()]
+    # Attach the (lazy-loaded) thumbnail URL for each card.
+    for p in products:
+        p["_image_url"] = shop_api.product_image_url(p["item_id"])
     return render_template(
         "index.html", products=products, categories=categories, active_category=category
     )
@@ -228,6 +236,22 @@ def orders():
 @app.route("/health")
 def health():
     return {"status": "ok"}
+
+
+# In-memory log of webhooks the shop calls back to us (Level 2: "receiving webhooks").
+WEBHOOK_LOG: list[dict] = []
+
+
+@app.route("/webhooks/incoming", methods=["POST", "GET"])
+def webhooks_incoming():
+    """Public endpoint the shop API calls back on events. Records what arrives."""
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        WEBHOOK_LOG.append({"at": _now(), "payload": payload,
+                            "headers": {k: v for k, v in request.headers.items()
+                                        if k.lower() in ("content-type", "x-webhook-event")}})
+        return {"received": True}, 200
+    return {"count": len(WEBHOOK_LOG), "events": WEBHOOK_LOG[-10:]}
 
 
 if __name__ == "__main__":
