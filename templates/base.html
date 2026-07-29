@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Furniture Shop{% endblock %}</title>
+  <style>
+    :root { --ink:#1d1d1f; --muted:#6b6b70; --line:#e4e4e7; --accent:#c2410c; --bg:#faf9f7; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+           color:var(--ink); background:var(--bg); }
+    header { display:flex; align-items:center; gap:1.5rem; padding:1rem 1.5rem;
+             border-bottom:1px solid var(--line); background:#fff; }
+    header a { color:var(--ink); text-decoration:none; }
+    header .brand { font-weight:700; letter-spacing:.02em; }
+    header nav { display:flex; gap:1.25rem; margin-left:auto; align-items:center; font-size:.95rem; }
+    .balance { color:var(--accent); font-weight:600; }
+    main { max-width:960px; margin:2rem auto; padding:0 1.5rem; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:1rem; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:1rem;
+            display:flex; flex-direction:column; gap:.4rem; }
+    .card .cat { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+    .card .name { font-weight:600; }
+    .card .price { color:var(--accent); font-weight:700; }
+    .btn { display:inline-block; background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:.5rem .9rem; font-size:.95rem; cursor:pointer; text-decoration:none; }
+    .btn.secondary { background:#fff; color:var(--ink); border:1px solid var(--line); }
+    input, select { padding:.5rem; border:1px solid var(--line); border-radius:8px; font-size:1rem; }
+    form.stack { display:flex; flex-direction:column; gap:.75rem; max-width:320px; }
+    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
+            border-radius:12px; overflow:hidden; }
+    th,td { text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); }
+    .flash { padding:.7rem 1rem; border-radius:8px; margin:.4rem 0; }
+    .flash.ok { background:#ecfdf5; color:#065f46; }
+    .flash.error { background:#fef2f2; color:#991b1b; }
+    .muted { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="{{ url_for('index') }}">◈ Furniture Shop</a>
+    <nav>
+      <a href="{{ url_for('index') }}">Catalogue</a>
+      {% if user %}
+        <a href="{{ url_for('orders') }}">My Orders</a>
+        <span class="balance">${{ '%.2f'|format(user['balance']) }}</span>
+        <span class="muted">{{ user['display_name'] }}</span>
+        <a href="{{ url_for('logout') }}">Log out</a>
+      {% else %}
+        <a href="{{ url_for('login') }}">Log in</a>
+        <a href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Register — Furniture Shop{% endblock %}
+{% block content %}
+  <h1>Create an account</h1>
+  <form class="stack" method="post">
+    <input type="text" name="username" placeholder="Username" autofocus>
+    <input type="text" name="display_name" placeholder="Display name (optional)">
+    <input type="password" name="password" placeholder="Password">
+    <button class="btn" type="submit">Register</button>
+  </form>
+  <p class="muted">Already have an account? <a href="{{ url_for('login') }}">Log in</a>.</p>
+{% endblock %}

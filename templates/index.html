@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Catalogue — Furniture Shop{% endblock %}
+{% block content %}
+  <h1>Catalogue</h1>
+  <p class="muted">Browse our furniture. Log in to place an order against your budget.</p>
+  <div class="grid">
+    {% for p in products %}
+      <div class="card">
+        <span class="cat">{{ p['category'] }}</span>
+        <span class="name">{{ p['product_name'] }}</span>
+        <span class="price">${{ '%.2f'|format(p['price']) }}</span>
+        <a class="btn secondary" href="{{ url_for('product', item_id=p['item_id']) }}">View</a>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}
