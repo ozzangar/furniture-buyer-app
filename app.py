@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import (
     Flask, Response, g, redirect, render_template, request, session, url_for, flash, abort,
@@ -421,6 +421,79 @@ def agent_confirm():
     hist.append({"role": "user", "content": [{"text": f"[system] Order confirmed and placed: {msg}"}]})
     session["agent_history"] = hist[-20:]
     return {"reply": msg, "pending": None}
+
+
+import integrations
+
+
+@app.route("/orders/<order_id>/calendar")
+def order_calendar(order_id: str):
+    """Download an .ics delivery-reminder for an order (pure Python, no external service)."""
+    if current_user() is None:
+        return redirect(url_for("login"))
+    if order_id not in set(session.get("my_order_ids", [])):
+        try:
+            session["my_order_ids"] = [o.get("order_id") for o in shop_api.get_order_history()]
+        except shop_api.ShopAPIError:
+            pass
+        if order_id not in set(session.get("my_order_ids", [])):
+            abort(404)
+    # Delivery reminder: 3 days out, 9am (local-ish; stored as UTC for simplicity).
+    start = datetime.now(timezone.utc) + timedelta(days=3)
+    start = start.replace(hour=9, minute=0, second=0, microsecond=0)
+    ics = integrations.build_ics(
+        summary=f"Boakea delivery — order {order_id[:8]}",
+        description=f"Your Boakea furniture order {order_id} is expected around this date.",
+        start=start, duration_minutes=30, location="Your address",
+    )
+    return Response(ics, mimetype="text/calendar",
+                    headers={"Content-Disposition": f'attachment; filename="boakea-{order_id[:8]}.ics"'})
+
+
+@app.route("/orders/<order_id>/email", methods=["POST"])
+def order_email(order_id: str):
+    """Email a receipt for an order (attaches the invoice PDF if available)."""
+    if current_user() is None:
+        return {"error": "not logged in"}, 401
+    to_addr = (request.get_json(silent=True) or {}).get("email", "").strip()
+    if not to_addr:
+        return {"ok": False, "message": "Please provide an email address."}, 200
+    attachment = None
+    try:
+        pdf = shop_api.get_invoice_pdf(order_id)
+        attachment = (f"invoice-{order_id[:8]}.pdf", pdf, "application/pdf")
+    except shop_api.ShopAPIError:
+        pass
+    result = integrations.send_email(
+        to_addr, subject=f"Your Boakea order {order_id[:8]}",
+        body=f"Thank you for your order!\n\nOrder ID: {order_id}\nYour invoice is attached.",
+        attachment=attachment,
+    )
+    return {"ok": result["sent"], "message": result["message"]}, 200
+
+
+@app.route("/tools/ocr", methods=["GET", "POST"])
+def tools_ocr():
+    """Upload an image (receipt/label/product photo) → Claude vision extracts text."""
+    if current_user() is None:
+        flash("Please log in to use tools.", "error")
+        return redirect(url_for("login"))
+    result = None
+    if request.method == "POST":
+        f = request.files.get("image")
+        if not f:
+            result = "No image uploaded."
+        else:
+            data = f.read()
+            if len(data) > 5 * 1024 * 1024:
+                result = "Image too large (max 5MB)."
+            else:
+                fmt = (f.mimetype or "image/jpeg").split("/")[-1]
+                try:
+                    result = integrations.ocr_image(data, image_format=fmt)
+                except Exception as e:
+                    result = f"Could not read image: {type(e).__name__}"
+    return render_template("ocr.html", result=result)
 
 
 @app.route("/health")

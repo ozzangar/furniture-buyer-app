@@ -104,6 +104,7 @@
     <nav>
       <a href="{{ url_for('index') }}">Shop products</a>
       {% if user %}<a href="#" onclick="document.getElementById('fab')?.click();return false;">✨ Assistant</a>{% endif %}
+      {% if user %}<a href="{{ url_for('tools_ocr') }}">📷 Scan</a>{% endif %}
       <a href="{{ url_for('index') }}">Offers</a>
     </nav>
     <form class="search" method="get" action="{{ url_for('index') }}">

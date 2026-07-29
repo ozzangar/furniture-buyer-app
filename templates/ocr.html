@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Scan an image — Boakea{% endblock %}
+{% block crumbs %}
+  <div class="crumbs"><a href="{{ url_for('index') }}">Home</a> › Scan an image</div>
+{% endblock %}
+{% block content %}
+  <h1 class="page">Scan an image</h1>
+  <p class="muted">Upload a photo, receipt, or product label — Claude reads the text and details out of it
+    (OCR via vision). Handy for extracting items from a paper receipt or a product tag.</p>
+
+  <form class="stack" method="post" enctype="multipart/form-data" style="max-width:460px;">
+    <input class="field" type="file" name="image" accept="image/*" required>
+    <button class="btn" type="submit">Extract text</button>
+  </form>
+
+  {% if result %}
+    <h3 style="margin-top:1.5rem;">Extracted</h3>
+    <pre style="white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:12px;
+         padding:1rem;font:14px/1.5 ui-monospace,monospace;">{{ result }}</pre>
+  {% endif %}
+{% endblock %}

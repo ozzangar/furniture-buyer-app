@@ -24,10 +24,28 @@
               {% endfor %}
             </td>
             <td>${{ '%.2f'|format(o['total_amount']) }}</td>
-            <td><a href="{{ url_for('invoice', order_id=o['order_id']) }}" target="_blank" rel="noopener">📄 PDF</a></td>
+            <td style="white-space:nowrap;">
+              <a href="{{ url_for('invoice', order_id=o['order_id']) }}" target="_blank" rel="noopener">📄 PDF</a>
+              &nbsp;·&nbsp;
+              <a href="{{ url_for('order_calendar', order_id=o['order_id']) }}">📅 Reminder</a>
+              &nbsp;·&nbsp;
+              <a href="#" onclick="emailReceipt('{{ o['order_id'] }}');return false;">✉️ Email</a>
+            </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   {% endif %}
+
+<script>
+async function emailReceipt(orderId) {
+  const to = prompt('Email the receipt + invoice to:');
+  if (!to) return;
+  const r = await fetch('/orders/' + encodeURIComponent(orderId) + '/email', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email: to})
+  });
+  const d = await r.json();
+  alert(d.message || (d.ok ? 'Sent' : 'Could not send'));
+}
+</script>
 {% endblock %}
