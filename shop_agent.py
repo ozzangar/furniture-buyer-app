@@ -40,7 +40,10 @@ SYSTEM_PROMPT_TEMPLATE = (
     "everything, or ask a brief clarifying question — do NOT guess a category name that "
     "isn't in the list above.\n"
     "Search matches the category exactly; it does NOT understand price, colour, or vibe, "
-    "so do that reasoning yourself over the results. Never invent products, prices, or "
+    "so do that reasoning yourself over the results. For open-ended or descriptive requests "
+    "that don't map to one category ('cozy reading corner', 'something Scandinavian', 'a small "
+    "table'), use semantic_search instead — then reason over the returned dimensions/prices to "
+    "judge 'small', 'cheap', etc. (embeddings can't do numbers). Never invent products, prices, or "
     "IDs; only use what the tools return. Before buying you must call place_order, which "
     "asks the user to confirm — never claim an order is complete until a confirmation "
     "result says so."
@@ -77,6 +80,16 @@ TOOLS = [
         "name": "check_balance",
         "description": "Get the current user's remaining balance in dollars.",
         "inputSchema": {"json": {"type": "object", "properties": {}}}}},
+    {"toolSpec": {
+        "name": "semantic_search",
+        "description": "Search products by MEANING / vibe, for open-ended or descriptive requests "
+                       "that don't map to an exact category — e.g. 'cozy reading corner', 'something "
+                       "Scandinavian', 'a small table for a tight space'. Returns products with price "
+                       "and dimensions; reason over those yourself for size/budget. Prefer "
+                       "search_catalogue when the user names a clear category.",
+        "inputSchema": {"json": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "The user's descriptive request, in natural language"}},
+            "required": ["query"]}}}},
     {"toolSpec": {
         "name": "place_order",
         "description": "Propose buying an item for the current user. This does NOT complete the "
@@ -153,6 +166,20 @@ def _h_balance(_args: dict) -> dict:
     return {"balance": shop_api.get_balance().get("balance")}
 
 
+def _h_semantic_search(args: dict) -> dict:
+    """Vector-RAG search by meaning. Returns products (with price + dimensions) so the
+    model can then reason over size/budget itself."""
+    import rag
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"count": 0, "products": []}
+    try:
+        results = rag.search(query, k=6)
+    except Exception as e:
+        return {"error": f"semantic search unavailable: {type(e).__name__}"}
+    return {"count": len(results), "products": results}
+
+
 def _h_place_order(args: dict) -> dict:
     """STAGE an order for human confirmation — never actually buys here.
 
@@ -179,6 +206,7 @@ def _h_place_order(args: dict) -> dict:
 
 HANDLERS = {
     "search_catalogue": _h_search,
+    "semantic_search": _h_semantic_search,
     "product_detail": _h_detail,
     "check_balance": _h_balance,
     "place_order": _h_place_order,
