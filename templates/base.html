@@ -43,7 +43,11 @@
       <a href="{{ url_for('index') }}">Catalogue</a>
       {% if user %}
         <a href="{{ url_for('orders') }}">My Orders</a>
-        <span class="balance">${{ '%.2f'|format(user['balance']) }}</span>
+        {% if balance is not none %}
+          <span class="balance">${{ '%.2f'|format(balance) }}</span>
+        {% else %}
+          <span class="muted" title="Shop API unavailable">balance —</span>
+        {% endif %}
         <span class="muted">{{ user['display_name'] }}</span>
         <a href="{{ url_for('logout') }}">Log out</a>
       {% else %}

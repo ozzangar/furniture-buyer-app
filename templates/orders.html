@@ -3,28 +3,27 @@
 {% block content %}
   <h1>My Orders</h1>
   <p class="muted">Total spent: <strong>${{ '%.2f'|format(total_spent) }}</strong>
-    · Remaining balance: <strong>${{ '%.2f'|format(user['balance']) }}</strong></p>
+    {% if balance is not none %}· Remaining balance: <strong>${{ '%.2f'|format(balance) }}</strong>{% endif %}</p>
 
   {% if not orders %}
     <p>No orders yet. <a href="{{ url_for('index') }}">Browse the catalogue →</a></p>
   {% else %}
     <table>
       <thead>
-        <tr><th>Order</th><th>When</th><th>Items</th><th>Total</th><th>Status</th></tr>
+        <tr><th>Order</th><th>When</th><th>Items</th><th>Total</th></tr>
       </thead>
       <tbody>
-        {% for entry in orders %}
+        {% for o in orders %}
           <tr>
-            <td class="muted">{{ entry.order['id'] }}</td>
-            <td class="muted">{{ entry.order['placed_at'][:16].replace('T', ' ') }}</td>
+            <td class="muted">{{ o['order_id'][:8] }}…</td>
+            <td class="muted">{{ (o['timestamp'] or '')[:16].replace('T', ' ') }}</td>
             <td>
-              {% for line in entry.lines %}
-                {{ line['quantity'] }} × {{ line['product_name'] }}
+              {% for line in o['items'] %}
+                {{ line['quantity'] }} × {{ line['product_name'] or line['product_id'] }}
                 (${{ '%.2f'|format(line['unit_price']) }}){% if not loop.last %}<br>{% endif %}
               {% endfor %}
             </td>
-            <td>${{ '%.2f'|format(entry.order['total_price']) }}</td>
-            <td>{{ entry.order['status'] }}</td>
+            <td>${{ '%.2f'|format(o['total_amount']) }}</td>
           </tr>
         {% endfor %}
       </tbody>

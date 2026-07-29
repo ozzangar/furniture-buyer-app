@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import uuid
 from datetime import datetime, timezone
 
 from flask import (
@@ -16,12 +15,18 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from catalogue import get_products, get_product
+import shop_api
+
+# Load .env (SHOP_API_* and FLASK_SECRET_KEY) if python-dotenv is available.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except Exception:
+    pass
 
 # --- config -----------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "app.db")
-STARTING_BALANCE = 2500.0  # per-user starting budget (Level 1 local value)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-not-for-production")
@@ -57,7 +62,6 @@ def init_db() -> None:
             username      TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             display_name  TEXT NOT NULL,
-            balance       REAL NOT NULL,
             created_at    TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS "order" (
@@ -92,9 +96,19 @@ def current_user() -> sqlite3.Row | None:
     return get_db().execute("SELECT * FROM customer WHERE id = ?", (uid,)).fetchone()
 
 
+def live_balance() -> float | None:
+    """Current balance from the shop API, or None if it can't be read."""
+    try:
+        return shop_api.get_balance().get("balance")
+    except shop_api.ShopAPIError:
+        return None
+
+
 @app.context_processor
 def inject_user() -> dict:
-    return {"user": current_user()}
+    user = current_user()
+    balance = live_balance() if user else None
+    return {"user": user, "balance": balance}
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -111,10 +125,9 @@ def register():
             flash("That username is taken.", "error")
             return render_template("register.html")
         db.execute(
-            "INSERT INTO customer (username, password_hash, display_name, balance, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (username, generate_password_hash(password, method=PW_METHOD), display,
-             STARTING_BALANCE, _now()),
+            "INSERT INTO customer (username, password_hash, display_name, created_at)"
+            " VALUES (?, ?, ?, ?)",
+            (username, generate_password_hash(password, method=PW_METHOD), display, _now()),
         )
         db.commit()
         flash("Account created — please log in.", "ok")
@@ -144,85 +157,72 @@ def logout():
     return redirect(url_for("index"))
 
 
-# --- catalogue + ordering ----------------------------------------------------
+# --- catalogue + ordering (real shop API) ------------------------------------
 @app.route("/")
 def index():
-    return render_template("index.html", products=get_products())
+    category = request.args.get("category") or None
+    try:
+        products = shop_api.list_products(category=category, limit=60)
+        categories = shop_api.get_categories()
+    except shop_api.ShopAPIError as e:
+        flash(f"Catalogue unavailable: {e.message}", "error")
+        products, categories = [], []
+    return render_template(
+        "index.html", products=products, categories=categories, active_category=category
+    )
 
 
 @app.route("/product/<item_id>")
 def product(item_id: str):
-    p = get_product(item_id)
+    try:
+        p = shop_api.get_product(item_id)
+    except shop_api.ShopAPIError as e:
+        flash(e.message, "error")
+        return redirect(url_for("index"))
     if p is None:
         abort(404)
+    p["_image_url"] = shop_api.product_image_url(item_id)
     return render_template("product.html", product=p)
 
 
 @app.route("/buy/<item_id>", methods=["POST"])
 def buy(item_id: str):
-    user = current_user()
-    if user is None:
+    if current_user() is None:
         flash("Please log in to place an order.", "error")
         return redirect(url_for("login"))
-    p = get_product(item_id)
-    if p is None:
-        abort(404)
     try:
         qty = max(1, int(request.form.get("quantity", "1")))
     except ValueError:
         qty = 1
-    total = round(p["price"] * qty, 2)
-
-    # Controller rule: cannot spend more than the remaining balance.
-    if total > user["balance"]:
-        flash(
-            f"Insufficient balance: this costs ${total:,.2f} but you have "
-            f"${user['balance']:,.2f}.",
-            "error",
-        )
+    try:
+        result = shop_api.place_order(item_id, qty)
+    except shop_api.ShopAPIError as e:
+        # 402 insufficient / 404 missing / etc. — clear message, no crash.
+        flash(e.message, "error")
         return redirect(url_for("product", item_id=item_id))
-
-    db = get_db()
-    order_id = uuid.uuid4().hex[:12]
-    db.execute(
-        'INSERT INTO "order" (id, customer_id, placed_at, total_price, status)'
-        " VALUES (?, ?, ?, ?, ?)",
-        (order_id, user["id"], _now(), total, "confirmed"),
-    )
-    db.execute(
-        "INSERT INTO order_line (order_id, item_id, product_name, quantity, unit_price)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (order_id, p["item_id"], p["product_name"], qty, p["price"]),
-    )
-    db.execute(
-        "UPDATE customer SET balance = balance - ? WHERE id = ?", (total, user["id"])
-    )
-    db.commit()
-    flash(f"Order placed: {qty} × {p['product_name']} for ${total:,.2f}.", "ok")
+    total = result.get("total_price", 0.0)
+    remaining = result.get("remaining_balance")
+    msg = f"Order placed: {qty} × {item_id} for ${total:,.2f}."
+    if remaining is not None:
+        msg += f" Remaining balance: ${remaining:,.2f}."
+    flash(msg, "ok")
     return redirect(url_for("orders"))
 
 
 @app.route("/orders")
 def orders():
-    user = current_user()
-    if user is None:
+    if current_user() is None:
         flash("Please log in to see your orders.", "error")
         return redirect(url_for("login"))
-    db = get_db()
-    rows = db.execute(
-        'SELECT * FROM "order" WHERE customer_id = ? ORDER BY placed_at DESC',
-        (user["id"],),
-    ).fetchall()
-    orders_with_lines = []
-    for o in rows:
-        lines = db.execute(
-            "SELECT * FROM order_line WHERE order_id = ?", (o["id"],)
-        ).fetchall()
-        orders_with_lines.append({"order": o, "lines": lines})
-    total_spent = sum(o["total_price"] for o in rows)
-    return render_template(
-        "orders.html", orders=orders_with_lines, total_spent=total_spent
-    )
+    try:
+        history = shop_api.get_order_history()
+    except shop_api.ShopAPIError as e:
+        flash(e.message, "error")
+        history = []
+    # Normalise: API returns newest-last; show newest first.
+    history = list(reversed(history))
+    total_spent = sum(o.get("total_amount", o.get("total_price", 0.0)) for o in history)
+    return render_template("orders.html", orders=history, total_spent=total_spent)
 
 
 @app.route("/health")

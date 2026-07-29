@@ -3,6 +3,22 @@
 {% block content %}
   <h1>Catalogue</h1>
   <p class="muted">Browse our furniture. Log in to place an order against your budget.</p>
+
+  {% if categories %}
+    <form method="get" style="margin:1rem 0;">
+      <select name="category" onchange="this.form.submit()">
+        <option value="">All categories</option>
+        {% for c in categories %}
+          <option value="{{ c }}" {% if c == active_category %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button class="btn secondary" type="submit">Filter</button></noscript>
+    </form>
+  {% endif %}
+
+  {% if not products %}
+    <p class="muted">No products to show.</p>
+  {% endif %}
   <div class="grid">
     {% for p in products %}
       <div class="card">
