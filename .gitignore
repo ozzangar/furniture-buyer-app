@@ -1,0 +1,33 @@
+# --- Secrets (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Databases / generated data ---
+*.sqlite
+*.sqlite3
+*.db
+data/
+
+# --- OS / editor ---
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+*.swp
