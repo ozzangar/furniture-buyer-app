@@ -28,16 +28,36 @@ MAX_QTY = 20                # per-order quantity clamp
 MAX_ORDER_VALUE = 3000.0    # hard spend cap (circuit breaker), independent of balance
 MAX_SEARCH_LIMIT = 24       # keep results (and context) bounded
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_TEMPLATE = (
     "You are Boakea's furniture shopping assistant. You ONLY help users browse the "
     "furniture catalogue, check their balance, and buy furniture. Politely decline "
-    "anything unrelated (no general chat, code, or other topics). "
-    "The catalogue search matches an EXACT category name (case-insensitive) — it does "
-    "NOT understand price, colour, or vibe, so do that reasoning yourself over the "
-    "results. Never invent products, prices, or IDs; only use what the tools return. "
-    "Before buying you must call place_order, which asks the user to confirm — never "
-    "claim an order is complete until a confirmation result says so."
+    "anything unrelated (no general chat, code, or other topics).\n"
+    "The ONLY valid product categories are exactly these:\n{categories}\n"
+    "When a user says something informal (e.g. 'tables', 'sofa', 'desk'), map it to the "
+    "closest category above and pass that EXACT name to search_catalogue "
+    "(e.g. 'tables' or 'desk' -> 'Tables & desks'; 'sofa' -> 'Sofas & armchairs'). "
+    "If unsure which category fits, call search_catalogue with no category to list "
+    "everything, or ask a brief clarifying question — do NOT guess a category name that "
+    "isn't in the list above.\n"
+    "Search matches the category exactly; it does NOT understand price, colour, or vibe, "
+    "so do that reasoning yourself over the results. Never invent products, prices, or "
+    "IDs; only use what the tools return. Before buying you must call place_order, which "
+    "asks the user to confirm — never claim an order is complete until a confirmation "
+    "result says so."
 )
+
+_categories_cache: list[str] | None = None
+
+
+def _system_prompt() -> str:
+    global _categories_cache
+    if _categories_cache is None:
+        try:
+            _categories_cache = shop_api.get_categories()
+        except Exception:
+            _categories_cache = []
+    cats = "\n".join(f"- {c}" for c in _categories_cache) or "(unavailable)"
+    return SYSTEM_PROMPT_TEMPLATE.format(categories=cats)
 
 # --- tool schemas the model sees (Bedrock Converse format) -------------------
 TOOLS = [
@@ -78,13 +98,41 @@ def _bedrock():
 
 
 # --- deterministic tool handlers (LLM args are untrusted) --------------------
+def _resolve_category(name: str) -> str | None:
+    """Map a possibly-informal category to a real one: exact → substring → word overlap.
+    Safety net so 'tables'/'sofa'/'desk' still work if the model's guess isn't exact."""
+    cats = _categories_cache if _categories_cache is not None else shop_api.get_categories()
+    n = name.strip().lower()
+    if not n:
+        return None
+    for c in cats:                                   # exact
+        if c.lower() == n:
+            return c
+    for c in cats:                                   # user term inside a category or vice-versa
+        cl = c.lower()
+        if n in cl or cl in n:
+            return c
+    nwords = set(n.replace("&", " ").split())        # any shared significant word
+    for c in cats:
+        cwords = set(c.lower().replace("&", " ").split())
+        if nwords & cwords:
+            return c
+    return None
+
+
 def _h_search(args: dict) -> dict:
-    category = str(args.get("category") or "").strip() or None
+    raw_cat = str(args.get("category") or "").strip()
+    category = _resolve_category(raw_cat) if raw_cat else None
     limit = args.get("limit") or MAX_SEARCH_LIMIT
     try:
         limit = max(1, min(int(limit), MAX_SEARCH_LIMIT))
     except (TypeError, ValueError):
         limit = MAX_SEARCH_LIMIT
+    # If the requested category couldn't be resolved, tell the model (so it can guide the user).
+    if raw_cat and category is None:
+        return {"count": 0, "products": [],
+                "note": f"'{raw_cat}' is not a valid category. Valid categories: "
+                        + ", ".join(_categories_cache or [])}
     products = shop_api.list_products(category=category, limit=limit)
     slim = [{"item_id": p["item_id"], "product_name": p["product_name"],
              "price": p["price"], "category": p["category"]} for p in products]
@@ -153,7 +201,7 @@ def run_turn(history: list[dict], user_text: str) -> dict:
 
     for _ in range(MAX_TOOL_ITERS):
         resp = _bedrock().converse(
-            modelId=MODEL_ID, messages=messages, system=[{"text": SYSTEM_PROMPT}],
+            modelId=MODEL_ID, messages=messages, system=[{"text": _system_prompt()}],
             toolConfig={"tools": TOOLS}, inferenceConfig={"maxTokens": 1024},
         )
         out = resp["output"]["message"]
