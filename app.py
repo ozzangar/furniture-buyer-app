@@ -158,26 +158,85 @@ def logout():
 
 
 # --- catalogue + ordering (real shop API) ------------------------------------
+CATALOGUE_PAGE = 24      # products per page (initial render + each infinite-scroll fetch)
+CATALOGUE_TTL = 600.0    # seconds to cache the full catalogue (it's static during the event)
+
+_catalogue_cache: dict = {"at": 0.0, "products": None}
+
+
+def _all_products() -> list[dict]:
+    """Full catalogue (all 762), cached in-process. One fast search-index call, no images."""
+    import time
+    now = time.time()
+    if _catalogue_cache["products"] is None or (now - _catalogue_cache["at"]) > CATALOGUE_TTL:
+        _catalogue_cache["products"] = shop_api.list_products(limit=1000)
+        _catalogue_cache["at"] = now
+    return _catalogue_cache["products"]
+
+
+def _filter_products(category: str | None, query: str) -> list[dict]:
+    """Filter the full catalogue by exact category and/or a name substring (case-insensitive)."""
+    items = _all_products()
+    if category:
+        c = category.lower()
+        items = [p for p in items if (p.get("category") or "").lower() == c]
+    if query:
+        q = query.lower()
+        items = [p for p in items if q in (p.get("product_name") or "").lower()]
+    return items
+
+
+def _page(category: str | None, query: str, skip: int, limit: int):
+    """A page over the FILTERED catalogue. Returns (page_items, has_more, total_matches).
+
+    Paginating the filtered set means a search always shows matching products on page 1
+    (no empty pages) and we know the exact total up front.
+    """
+    items = _filter_products(category, query)
+    total = len(items)
+    page = items[skip:skip + limit]
+    for p in page:
+        p["_image_url"] = shop_api.product_image_url(p["item_id"])
+    return page, (skip + limit < total), total
+
+
 @app.route("/")
 def index():
     category = request.args.get("category") or None
     query = (request.args.get("q") or "").strip()
     try:
-        products = shop_api.list_products(category=category, limit=48)
+        products, has_more, total = _page(category, query, 0, CATALOGUE_PAGE)
         categories = shop_api.get_categories()
     except shop_api.ShopAPIError as e:
         flash(f"Catalogue unavailable: {e.message}", "error")
-        products, categories = [], []
-    # Free-text search: the API has no fuzzy search, so filter by name over results.
-    if query:
-        q = query.lower()
-        products = [p for p in products if q in (p.get("product_name") or "").lower()]
-    # Attach the (lazy-loaded) thumbnail URL for each card.
-    for p in products:
-        p["_image_url"] = shop_api.product_image_url(p["item_id"])
+        products, categories, has_more, total = [], [], False, 0
     return render_template(
-        "index.html", products=products, categories=categories, active_category=category
+        "index.html", products=products, categories=categories, active_category=category,
+        query=query, has_more=has_more, page_size=CATALOGUE_PAGE, total=total,
     )
+
+
+@app.route("/api/products")
+def api_products():
+    """JSON page of products for infinite scroll (paginates over the filtered catalogue)."""
+    category = request.args.get("category") or None
+    query = (request.args.get("q") or "").strip()
+    try:
+        skip = max(0, int(request.args.get("skip", "0")))
+    except (TypeError, ValueError):
+        skip = 0
+    try:
+        products, has_more, total = _page(category, query, skip, CATALOGUE_PAGE)
+    except shop_api.ShopAPIError as e:
+        return {"error": e.message, "products": [], "has_more": False, "total": 0}, 200
+    return {
+        "products": [{"item_id": p["item_id"], "product_name": p["product_name"],
+                      "price": p["price"], "category": p["category"],
+                      "image_url": p["_image_url"]} for p in products],
+        "next_skip": skip + CATALOGUE_PAGE,
+        "has_more": has_more,
+        "total": total,
+    }
 
 
 @app.route("/product/<item_id>")
@@ -231,6 +290,81 @@ def orders():
     history = list(reversed(history))
     total_spent = sum(o.get("total_amount", o.get("total_price", 0.0)) for o in history)
     return render_template("orders.html", orders=history, total_spent=total_spent)
+
+
+import shop_agent
+
+MAX_ORDER_VALUE = 3000.0  # must match shop_agent; enforced again here at execute time
+
+
+@app.route("/agent")
+def agent_page():
+    # The assistant is now a floating widget on every page (see _agent_widget.html).
+    # Keep this route as a gentle fallback: send logged-in users home where the FAB lives.
+    if current_user() is None:
+        flash("Please log in to use the shopping assistant.", "error")
+        return redirect(url_for("login"))
+    flash("Tap the ✨ button, bottom-right, to chat with the shopping assistant.", "ok")
+    return redirect(url_for("index"))
+
+
+@app.route("/agent/message", methods=["POST"])
+def agent_message():
+    if current_user() is None:
+        return {"error": "not logged in"}, 401
+    text = (request.get_json(silent=True) or {}).get("message", "")
+    history = session.get("agent_history", [])
+    try:
+        result = shop_agent.run_turn(history, text)
+    except Exception as e:  # never leak a stack trace to the user
+        app.logger.exception("agent turn failed")
+        return {"reply": f"The assistant hit an error: {type(e).__name__}. Try again.",
+                "pending": None}, 200
+    session["agent_history"] = result["history"][-20:]  # bound stored context
+    pending = result["pending"]
+    if pending:
+        # Stash the staged order server-side; the browser only gets a display copy.
+        session["pending_order"] = {"item_id": pending["item_id"],
+                                    "quantity": pending["quantity"]}
+    else:
+        session.pop("pending_order", None)
+    return {"reply": result["reply"], "pending": pending}
+
+
+@app.route("/agent/confirm", methods=["POST"])
+def agent_confirm():
+    """The ONLY place a real purchase executes. Physical gate: requires a human
+    request + a server-side staged order; re-fetches price and re-checks the cap.
+    The LLM has no path to trigger this route."""
+    if current_user() is None:
+        return {"error": "not logged in"}, 401
+    staged = session.get("pending_order")
+    if not staged:
+        return {"reply": "There's no order waiting to confirm.", "pending": None}, 200
+    item_id, qty = staged["item_id"], staged["quantity"]
+    session.pop("pending_order", None)  # single-use: consume it now
+
+    # Re-verify server-side — don't trust anything the model said earlier.
+    p = shop_api.get_product(item_id)
+    if p is None:
+        return {"reply": "That item is no longer available.", "pending": None}, 200
+    total = round(p["price"] * qty, 2)
+    if total > MAX_ORDER_VALUE:
+        return {"reply": f"Order (${total:,.2f}) exceeds the safety limit; not placed.",
+                "pending": None}, 200
+    try:
+        res = shop_api.place_order(item_id, qty)
+    except shop_api.ShopAPIError as e:
+        return {"reply": e.message, "pending": None}, 200
+    remaining = res.get("remaining_balance")
+    msg = f"✅ Order placed: {qty} × {p['product_name']} for ${total:,.2f}."
+    if remaining is not None:
+        msg += f" Remaining balance: ${remaining:,.2f}."
+    # Record the confirmation into the agent's context so it knows it's done.
+    hist = session.get("agent_history", [])
+    hist.append({"role": "user", "content": [{"text": f"[system] Order confirmed and placed: {msg}"}]})
+    session["agent_history"] = hist[-20:]
+    return {"reply": msg, "pending": None}
 
 
 @app.route("/health")
