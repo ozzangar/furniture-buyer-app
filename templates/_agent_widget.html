@@ -1,0 +1,137 @@
+<!-- Floating shopping-assistant widget (logged-in only). FAB bottom-right → popup. -->
+<style>
+  #fab {
+    position:fixed; right:24px; bottom:24px; z-index:1000;
+    width:60px; height:60px; border-radius:50%; border:0; cursor:pointer;
+    background:var(--forest); color:#fff; font-size:1.6rem; line-height:60px;
+    box-shadow:0 6px 20px rgba(0,0,0,.28); transition:transform .18s, box-shadow .18s;
+  }
+  #fab:hover { transform:scale(1.06); box-shadow:0 8px 26px rgba(0,0,0,.34); }
+  #fab.hidden { display:none; }
+
+  #agentpop {
+    position:fixed; right:24px; bottom:24px; z-index:1001;
+    width:380px; max-width:calc(100vw - 32px); height:560px; max-height:calc(100vh - 48px);
+    background:#fff; border-radius:16px; box-shadow:0 18px 50px rgba(0,0,0,.30);
+    display:flex; flex-direction:column; overflow:hidden;
+    transform-origin:bottom right; transform:scale(.2); opacity:0; pointer-events:none;
+    transition:transform .22s cubic-bezier(.2,.9,.3,1.2), opacity .18s;
+  }
+  #agentpop.open { transform:scale(1); opacity:1; pointer-events:auto; }
+
+  #agentpop .head { background:var(--forest); color:#fff; padding:.85rem 1rem;
+    display:flex; align-items:center; gap:.5rem; }
+  #agentpop .head .t { font-weight:700; }
+  #agentpop .head .close { margin-left:auto; background:transparent; border:0; color:#fff;
+    font-size:1.3rem; cursor:pointer; line-height:1; }
+  #agentpop .chat { flex:1; overflow-y:auto; padding:1rem; display:flex; flex-direction:column; gap:.6rem;
+    background:var(--cream); }
+  #agentpop .bub { max-width:82%; padding:.55rem .8rem; border-radius:14px; white-space:pre-wrap;
+    font-size:.92rem; }
+  #agentpop .bub.you { align-self:flex-end; background:var(--forest); color:#fff; border-bottom-right-radius:4px; }
+  #agentpop .bub.bot { align-self:flex-start; background:#fff; border:1px solid var(--line);
+    border-bottom-left-radius:4px; }
+  #agentpop .bub.typing { align-self:flex-start; background:#fff; border:1px solid var(--line);
+    border-bottom-left-radius:4px; padding:.7rem .85rem; }
+  #agentpop .typing .lines { display:flex; flex-direction:column; gap:.4rem; }
+  #agentpop .typing .ln { height:9px; border-radius:5px; }
+  #agentpop .typing .ln.a { width:150px; } #agentpop .typing .ln.b { width:110px; }
+  #agentpop .confirm { margin:0 1rem; padding:.7rem .85rem; background:#e8f3ee; border:1px solid #bfe0d0;
+    border-radius:10px; font-size:.9rem; display:none; }
+  #agentpop .confirm.show { display:block; }
+  #agentpop .confirm .row { margin-top:.55rem; display:flex; gap:.5rem; }
+  #agentpop form { display:flex; gap:.5rem; padding:.8rem; border-top:1px solid var(--line); background:#fff; }
+  #agentpop input { flex:1; border:1px solid var(--line); border-radius:999px; padding:.55rem .9rem;
+    font-size:.92rem; outline:none; }
+  #agentpop .btn { padding:.5rem 1rem; }
+</style>
+
+<button id="fab" title="Shopping assistant" aria-label="Open shopping assistant">✨</button>
+
+<div id="agentpop" role="dialog" aria-label="Shopping assistant">
+  <div class="head">
+    <span>✨</span><span class="t">Shopping assistant</span>
+    <button class="close" id="agentclose" aria-label="Close">×</button>
+  </div>
+  <div class="chat" id="achat">
+    <div class="bub bot">Hi! I can search the catalogue, check your balance, and buy furniture for you.
+      Try “find a chair under $100” or “what’s my balance?”. I’ll always confirm before spending.</div>
+  </div>
+  <div class="confirm" id="aconfirm">
+    <span id="aconfirmtext"></span>
+    <div class="row">
+      <button class="btn" id="ayes">Confirm purchase</button>
+      <button class="btn ghost" id="ano">Cancel</button>
+    </div>
+  </div>
+  <form id="aform">
+    <input id="ainput" autocomplete="off" placeholder="Type your request…">
+    <button class="btn" type="submit" id="asend">Send</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  const fab = document.getElementById('fab');
+  const pop = document.getElementById('agentpop');
+  const chat = document.getElementById('achat');
+  const form = document.getElementById('aform');
+  const input = document.getElementById('ainput');
+  const send = document.getElementById('asend');
+  const confirmBar = document.getElementById('aconfirm');
+  const confirmText = document.getElementById('aconfirmtext');
+  const URL_MSG = '{{ url_for("agent_message") }}';
+  const URL_CONFIRM = '{{ url_for("agent_confirm") }}';
+
+  function openPop(o) {
+    pop.classList.toggle('open', o);
+    fab.classList.toggle('hidden', o);
+    if (o) setTimeout(() => input.focus(), 200);
+  }
+  fab.addEventListener('click', () => openPop(true));
+  document.getElementById('agentclose').addEventListener('click', () => openPop(false));
+
+  function bubble(who, text) {
+    const d = document.createElement('div');
+    d.className = 'bub ' + who; d.textContent = text;
+    chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return d;
+  }
+  async function post(url, body) {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify(body||{})});
+    if (r.status === 401) return {reply:'Your session expired — please log in again.', pending:null};
+    return r.json();
+  }
+  function showConfirm(p) {
+    if (!p) { confirmBar.classList.remove('show'); return; }
+    confirmText.textContent = `Buy ${p.quantity} × ${p.product_name} for $${p.total_price.toFixed(2)}?`;
+    confirmBar.classList.add('show');
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text) return;
+    bubble('you', text); input.value=''; send.disabled=true;
+    // animated skeleton "thinking" bubble
+    const typing = document.createElement('div');
+    typing.className = 'bub typing';
+    typing.innerHTML = '<div class="lines"><span class="ln a skel"></span><span class="ln b skel"></span></div>';
+    chat.appendChild(typing); chat.scrollTop = chat.scrollHeight;
+    try {
+      const res = await post(URL_MSG, {message:text});
+      typing.remove(); bubble('bot', res.reply || '(no reply)'); showConfirm(res.pending);
+    } catch { typing.remove(); bubble('bot', 'Network error — try again.'); }
+    send.disabled=false; input.focus();
+  });
+  document.getElementById('ayes').addEventListener('click', async () => {
+    confirmBar.classList.remove('show');
+    const res = await post(URL_CONFIRM, {});
+    bubble('bot', res.reply);
+  });
+  document.getElementById('ano').addEventListener('click', async () => {
+    confirmBar.classList.remove('show');
+    await post(URL_MSG, {message:'cancel that order'});
+    bubble('bot', 'Okay, cancelled — nothing was purchased.');
+  });
+})();
+</script>
