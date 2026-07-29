@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from flask import (
-    Flask, g, redirect, render_template, request, session, url_for, flash, abort,
+    Flask, Response, g, redirect, render_template, request, session, url_for, flash, abort,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -289,7 +289,37 @@ def orders():
     # Normalise: API returns newest-last; show newest first.
     history = list(reversed(history))
     total_spent = sum(o.get("total_amount", o.get("total_price", 0.0)) for o in history)
+    my_order_ids = {o.get("order_id") for o in history}
+    session["my_order_ids"] = list(my_order_ids)  # remember for the invoice guard
     return render_template("orders.html", orders=history, total_spent=total_spent)
+
+
+@app.route("/orders/<order_id>/invoice")
+def invoice(order_id: str):
+    """Stream an order's PDF invoice (fetched server-side with the API key)."""
+    if current_user() is None:
+        flash("Please log in to view invoices.", "error")
+        return redirect(url_for("login"))
+    # Defence in depth: only allow invoices for orders we've seen in THIS user's history.
+    # (The shop API also scopes invoices to the key's user.)
+    if order_id not in set(session.get("my_order_ids", [])):
+        # refresh the allow-list once in case the order is newer than the last /orders view
+        try:
+            ids = {o.get("order_id") for o in shop_api.get_order_history()}
+        except shop_api.ShopAPIError:
+            ids = set()
+        session["my_order_ids"] = list(ids)
+        if order_id not in ids:
+            abort(404)
+    try:
+        pdf = shop_api.get_invoice_pdf(order_id)
+    except shop_api.ShopAPIError as e:
+        flash(e.message, "error")
+        return redirect(url_for("orders"))
+    return Response(
+        pdf, mimetype="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="invoice-{order_id[:8]}.pdf"'},
+    )
 
 
 import threading

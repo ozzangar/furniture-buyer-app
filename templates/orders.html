@@ -10,7 +10,7 @@
   {% else %}
     <table>
       <thead>
-        <tr><th>Order</th><th>When</th><th>Items</th><th>Total</th></tr>
+        <tr><th>Order</th><th>When</th><th>Items</th><th>Total</th><th>Invoice</th></tr>
       </thead>
       <tbody>
         {% for o in orders %}
@@ -24,6 +24,7 @@
               {% endfor %}
             </td>
             <td>${{ '%.2f'|format(o['total_amount']) }}</td>
+            <td><a href="{{ url_for('invoice', order_id=o['order_id']) }}" target="_blank" rel="noopener">📄 PDF</a></td>
           </tr>
         {% endfor %}
       </tbody>

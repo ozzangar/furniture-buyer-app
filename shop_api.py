@@ -126,3 +126,16 @@ def place_order(item_id: str, quantity: int = 1) -> dict:
 def get_order_history() -> list[dict]:
     resp = _request("GET", f"/orders/{_user_id()}", auth=True)
     return resp.json() if resp.status_code == 200 else []
+
+
+def get_invoice_pdf(order_id: str) -> bytes:
+    """Raw PDF bytes for an order's invoice. Needs the key (fetched server-side).
+
+    Raises ShopAPIError on failure (e.g. 404 unknown order, 401 bad key).
+    """
+    resp = _request("GET", f"/orders/{order_id}/invoice", auth=True, timeout=30)
+    if resp.status_code == 404:
+        raise ShopAPIError("Invoice not found for that order.", 404)
+    if resp.status_code != 200:
+        raise ShopAPIError("Could not fetch that invoice.", resp.status_code)
+    return resp.content
