@@ -194,10 +194,20 @@ def run_turn(history: list[dict], user_text: str) -> dict:
     """
     user_text = (user_text or "").strip()[:1000]  # clamp input length
     if not user_text:
-        return {"reply": "Please type a request.", "history": history, "pending": None}
+        return {"reply": "Please type a request.", "history": history, "pending": None,
+                "products": []}
 
     messages = list(history) + [{"role": "user", "content": [{"text": user_text}]}]
     pending = None
+    referenced: dict[str, dict] = {}   # products the agent looked at this turn (by item_id)
+
+    def _remember(items: list[dict]):
+        for p in items:
+            iid = p.get("item_id")
+            if iid and iid not in referenced:
+                referenced[iid] = {"item_id": iid, "product_name": p.get("product_name"),
+                                   "price": p.get("price"),
+                                   "image_url": shop_api.product_image_url(iid)}
 
     for _ in range(MAX_TOOL_ITERS):
         resp = _bedrock().converse(
@@ -209,7 +219,8 @@ def run_turn(history: list[dict], user_text: str) -> dict:
 
         if resp.get("stopReason") != "tool_use":
             reply = "".join(b.get("text", "") for b in out["content"]).strip()
-            return {"reply": reply or "(no response)", "history": messages, "pending": pending}
+            return {"reply": reply or "(no response)", "history": messages, "pending": pending,
+                    "products": list(referenced.values())[:6]}
 
         # Execute each requested tool through the allowlist; feed results back.
         tool_results = []
@@ -219,8 +230,13 @@ def run_turn(history: list[dict], user_text: str) -> dict:
             tu = block["toolUse"]
             handler = HANDLERS.get(tu["name"])
             result = handler(tu.get("input") or {}) if handler else {"error": "unknown tool"}
-            if isinstance(result, dict) and result.get("pending_confirmation"):
-                pending = result  # capture staged order; app.py will gate the real buy
+            if isinstance(result, dict):
+                if result.get("pending_confirmation"):
+                    pending = result  # staged order; app.py gates the real buy
+                if result.get("products"):                 # from search_catalogue
+                    _remember(result["products"])
+                elif result.get("item_id"):                # from product_detail
+                    _remember([result])
             tool_results.append({"toolResult": {
                 "toolUseId": tu["toolUseId"],
                 "content": [{"json": result}]}})
@@ -228,4 +244,4 @@ def run_turn(history: list[dict], user_text: str) -> dict:
 
     # Hit the loop cap — return whatever text we have rather than looping forever.
     return {"reply": "I've done as much as I safely can in one go — could you narrow that down?",
-            "history": messages, "pending": pending}
+            "history": messages, "pending": pending, "products": list(referenced.values())[:6]}

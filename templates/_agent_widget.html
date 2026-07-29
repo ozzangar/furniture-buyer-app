@@ -31,6 +31,19 @@
   #agentpop .bub.you { align-self:flex-end; background:var(--forest); color:#fff; border-bottom-right-radius:4px; }
   #agentpop .bub.bot { align-self:flex-start; background:#fff; border:1px solid var(--line);
     border-bottom-left-radius:4px; }
+  /* inline product preview cards */
+  #agentpop .prodcards { align-self:flex-start; width:100%; display:flex; flex-direction:column; gap:.4rem; }
+  #agentpop .pcard { display:flex; align-items:center; gap:.6rem; text-decoration:none; color:inherit;
+    background:#fff; border:1px solid var(--line); border-radius:10px; padding:.45rem .55rem;
+    transition:box-shadow .12s, transform .12s; }
+  #agentpop .pcard:hover { box-shadow:0 3px 12px rgba(0,0,0,.12); transform:translateY(-1px); }
+  #agentpop .pcard .pimg { width:46px; height:46px; flex:0 0 46px; border-radius:8px; overflow:hidden;
+    background:#f1efe8; display:flex; align-items:center; justify-content:center; }
+  #agentpop .pcard .pimg img { width:100%; height:100%; object-fit:contain; mix-blend-mode:multiply; }
+  #agentpop .pcard .pmeta { flex:1; min-width:0; }
+  #agentpop .pcard .pname { font-size:.86rem; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #agentpop .pcard .pprice { font-weight:800; font-size:.95rem; }
+  #agentpop .pcard .parrow { color:var(--forest); font-weight:700; padding-right:.2rem; }
   #agentpop .bub.typing { align-self:flex-start; background:#fff; border:1px solid var(--line);
     border-bottom-left-radius:4px; padding:.7rem .85rem; }
   #agentpop .typing .lines { display:flex; flex-direction:column; gap:.4rem; }
@@ -83,18 +96,64 @@
   const URL_MSG = '{{ url_for("agent_message") }}';
   const URL_CONFIRM = '{{ url_for("agent_confirm") }}';
 
+  // --- transcript persistence (survives navigating to a product page) ---
+  // The visible chat only lives in the popup DOM, so a full-page nav would wipe it.
+  // We mirror each turn into sessionStorage and replay it when the widget loads,
+  // so the conversation is intact wherever you go in the tab.
+  const LOG_KEY = 'boakea_chat_log';
+  const OPEN_KEY = 'boakea_chat_open';
+  let log = [];
+  try { log = JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]'); } catch (e) { log = []; }
+  function saveLog() { try { sessionStorage.setItem(LOG_KEY, JSON.stringify(log.slice(-40))); } catch (e) {} }
+
   function openPop(o) {
     pop.classList.toggle('open', o);
     fab.classList.toggle('hidden', o);
+    try { sessionStorage.setItem(OPEN_KEY, o ? '1' : '0'); } catch (e) {}
     if (o) setTimeout(() => input.focus(), 200);
   }
   fab.addEventListener('click', () => openPop(true));
   document.getElementById('agentclose').addEventListener('click', () => openPop(false));
 
-  function bubble(who, text) {
+  // record=false when replaying from storage (avoid double-logging)
+  function bubble(who, text, record) {
     const d = document.createElement('div');
     d.className = 'bub ' + who; d.textContent = text;
-    chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return d;
+    chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+    if (record !== false) { log.push({t: 'msg', who: who, text: text}); saveLog(); }
+    return d;
+  }
+
+  // Render trusted product preview cards. Values come from the server (never LLM-authored
+  // HTML); we build DOM with textContent/attributes so nothing can be injected.
+  function renderProducts(products, record) {
+    if (!products || !products.length) return;
+    if (record !== false) { log.push({t: 'products', products: products}); saveLog(); }
+    const wrap = document.createElement('div');
+    wrap.className = 'prodcards';
+    products.forEach(function (p) {
+      const a = document.createElement('a');
+      a.className = 'pcard';
+      a.href = '/product/' + encodeURIComponent(p.item_id);   // navigates the main window
+      const imgbox = document.createElement('div'); imgbox.className = 'pimg';
+      if (p.image_url) {
+        const img = document.createElement('img');
+        img.src = p.image_url; img.alt = p.product_name || '';
+        img.loading = 'lazy';
+        img.onerror = function () { imgbox.style.display = 'none'; };
+        imgbox.appendChild(img);
+      }
+      const meta = document.createElement('div'); meta.className = 'pmeta';
+      const price = document.createElement('div'); price.className = 'pprice';
+      price.textContent = (p.price != null) ? ('$' + Math.round(p.price)) : '';
+      const name = document.createElement('div'); name.className = 'pname';
+      name.textContent = p.product_name || p.item_id;
+      meta.appendChild(price); meta.appendChild(name);
+      const arrow = document.createElement('span'); arrow.className = 'parrow'; arrow.textContent = '→';
+      a.appendChild(imgbox); a.appendChild(meta); a.appendChild(arrow);
+      wrap.appendChild(a);
+    });
+    chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
   }
   async function post(url, body) {
     const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
@@ -119,7 +178,8 @@
     chat.appendChild(typing); chat.scrollTop = chat.scrollHeight;
     try {
       const res = await post(URL_MSG, {message:text});
-      typing.remove(); bubble('bot', res.reply || '(no reply)'); showConfirm(res.pending);
+      typing.remove(); bubble('bot', res.reply || '(no reply)');
+      renderProducts(res.products); showConfirm(res.pending);
     } catch { typing.remove(); bubble('bot', 'Network error — try again.'); }
     send.disabled=false; input.focus();
   });
@@ -133,5 +193,19 @@
     await post(URL_MSG, {message:'cancel that order'});
     bubble('bot', 'Okay, cancelled — nothing was purchased.');
   });
+
+  // Replay the saved transcript (from a previous page in this tab), then re-open the
+  // popup if it was open — so navigating to a product page doesn't lose the chat.
+  (function restore() {
+    if (log.length) {
+      // clear the default greeting bubble only if we have real history
+      chat.innerHTML = '';
+      log.forEach(function (e) {
+        if (e.t === 'msg') bubble(e.who, e.text, false);
+        else if (e.t === 'products') renderProducts(e.products, false);
+      });
+    }
+    if (sessionStorage.getItem(OPEN_KEY) === '1') openPop(true);
+  })();
 })();
 </script>

@@ -344,7 +344,8 @@ def agent_message():
         if old:
             with _ORDER_LOCK:
                 _UNCLAIMED_ORDER_TOKENS.discard(old.get("token"))
-    return {"reply": result["reply"], "pending": pending}
+    return {"reply": result["reply"], "pending": pending,
+            "products": result.get("products", [])}
 
 
 @app.route("/agent/confirm", methods=["POST"])
